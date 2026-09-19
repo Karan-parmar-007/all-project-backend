@@ -63,3 +63,8 @@ app.add_middleware(
 app.include_router(main_router)
 # Local-dev cookie path: refresh_token is scoped to /api/auth
 app.include_router(auth_routes.router, prefix="/api")
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
