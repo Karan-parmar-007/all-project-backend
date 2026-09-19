@@ -323,8 +323,13 @@ async def seed(session: AsyncSession) -> None:
             session, select(ApProjectStatus).where(ApProjectStatus.slug == row["slug"])
         )
         if found:
-            print(f"status exists ({row['slug']}) — skip")
+            found.show_in_list = row["show_in_list"]
+            found.allows_access = row["allows_access"]
+            found.sequence = row["sequence"]
+            found.name = row["name"]
+            session.add(found)
             status_by_slug[row["slug"]] = found
+            print(f"status flags synced ({row['slug']})")
             continue
         item = ApProjectStatus(**row, created_at=now, updated_at=now)
         session.add(item)

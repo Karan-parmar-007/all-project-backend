@@ -53,11 +53,13 @@ class SkillService:
         return api_media_url(key)
 
     async def _skill_counts(self) -> dict[str, int]:
-        """Count projects per skill name, excluding archived projects."""
+        """Count projects per skill name, excluding hidden projects."""
+        from app.api.routes.project.project_constants import HIDDEN_STATUS_SLUG
+
         proj_stmt = (
             select(ApProject.tech_stack)
             .join(ApProjectStatus, ApProject.status_id == ApProjectStatus.id)
-            .where(ApProjectStatus.slug != "archived")
+            .where(func.lower(ApProjectStatus.slug) != HIDDEN_STATUS_SLUG)
         )
         proj_rows = (await self.pg_session.execute(proj_stmt)).scalars().all()
         skill_counts: dict[str, int] = defaultdict(int)

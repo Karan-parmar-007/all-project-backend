@@ -18,9 +18,11 @@ from app.api.routes.project.model import (
     ApProjectTagLink,
 )
 from app.api.routes.project.project_constants import (
+    HIDDEN_STATUS_SLUG,
     MAX_FEATURED_PROJECTS,
     MAX_NON_FEATURED_PORTFOLIO,
 )
+from app.api.routes.project.project_service import ProjectService
 from app.api.routes.skill.skill_schemas import SkillItemsResponse, SkillListResponse
 from app.api.routes.skill.skill_service import SkillService
 from app.utils.media_urls import api_media_url
@@ -59,7 +61,7 @@ async def _to_card(session: AsyncSession, p: ApProject) -> PortfolioProjectCard:
         slug=p.slug,
         short_description=p.short_description,
         status=status.slug,
-        live_url=p.live_url,
+        live_url=ProjectService._effective_live_url(p),
         github_url=p.github_url,
         cover_image_key=p.cover_image_key,
         cover_image_url=cover_url,
@@ -77,7 +79,7 @@ async def get_featured_projects(session: PGSessionDep) -> PortfolioFeaturedRespo
             .join(ApProjectStatus, ApProject.status_id == ApProjectStatus.id)
             .where(
                 ApProject.is_featured == True,  # noqa: E712
-                ApProjectStatus.show_in_list == True,  # noqa: E712
+                ApProjectStatus.slug != HIDDEN_STATUS_SLUG,
             )
             .order_by(ApProject.sequence.asc())
             .limit(MAX_FEATURED_PROJECTS)
@@ -98,7 +100,7 @@ async def get_non_featured_projects(
             .join(ApProjectStatus, ApProject.status_id == ApProjectStatus.id)
             .where(
                 ApProject.is_featured == False,  # noqa: E712
-                ApProjectStatus.show_in_list == True,  # noqa: E712
+                ApProjectStatus.slug != HIDDEN_STATUS_SLUG,
             )
             .order_by(ApProject.sequence.asc())
             .limit(MAX_NON_FEATURED_PORTFOLIO)

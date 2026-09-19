@@ -17,7 +17,7 @@ from app.api.routes.project.model import (
     ApProjectTag,
     ApProjectTagLink,
 )
-from app.api.routes.project.project_constants import MAX_FEATURED_PROJECTS
+from app.api.routes.project.project_constants import HIDDEN_STATUS_SLUG, MAX_FEATURED_PROJECTS
 from app.api.routes.project.project_schemas import (
     ProjectDetailResponse,
     ProjectSummaryResponse,
@@ -206,7 +206,7 @@ class ProjectService:
             ApProjectStatus.sequence.asc(), ApProjectStatus.name.asc()
         )
         if public_only:
-            stmt = stmt.where(ApProjectStatus.show_in_list.is_(True))
+            stmt = stmt.where(func.lower(ApProjectStatus.slug) != HIDDEN_STATUS_SLUG)
         rows = (await self.pg_session.execute(stmt)).scalars().all()
         return [self._status_brief(r) for r in rows]
 
@@ -300,7 +300,7 @@ class ProjectService:
         base = (
             select(ApProject)
             .join(ApProjectStatus, ApProject.status_id == ApProjectStatus.id)
-            .where(ApProjectStatus.show_in_list.is_(True))
+            .where(func.lower(ApProjectStatus.slug) != HIDDEN_STATUS_SLUG)
         )
         if q:
             base = base.where(ApProject.name.ilike(f"%{q}%"))
@@ -329,6 +329,9 @@ class ProjectService:
             )
         ).scalar_one_or_none()
         if project is None:
+            raise NotFoundError("Project not found")
+        status = await self._get_status(project.status_id)
+        if status.slug.lower() == HIDDEN_STATUS_SLUG:
             raise NotFoundError("Project not found")
         return await self._to_detail(project)
 
