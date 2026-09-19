@@ -13,6 +13,7 @@ from app.core.errors import register_exception_handlers
 from app.db.garage import GarageSession
 from app.db.mongo_session import MongoSession
 from app.db.postgres_session import PostgresSession
+from bootstrap import run_bootstrap
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -32,8 +33,9 @@ async def lifespan(app: FastAPI):
     try:
         await postgres_session.verify_connection()
         logger.info("PostgreSQL connected successfully")
+        await run_bootstrap(postgres_session._sessionmaker)
     except Exception as exc:
-        logger.error("PostgreSQL verify failed: %s", exc)
+        logger.exception("PostgreSQL verify or bootstrap failed: %s", exc)
 
     try:
         await mongo_session.verify_connection()
