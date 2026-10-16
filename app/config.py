@@ -1,5 +1,5 @@
 # app/config.py
-from pydantic import field_validator
+from karan_sso import SsoSettings
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _base_config = SettingsConfigDict(
@@ -38,31 +38,44 @@ class DatabaseSettings(BaseSettings):
 
 
 class AuthSettings(BaseSettings):
-    SSO_JWT_SECRET: str
-    SSO_JWT_ALGORITHM: str = "HS256"
-    SSO_BASE_URL: str = "http://localhost:8000/api"
-    SSO_FRONTEND_URL: str = "http://localhost:5173"
-    ACCESS_TOKEN_COOKIE_NAME: str = "access_token"
-    CSRF_COOKIE_NAME: str = "csrf_token"
-    CSRF_HEADER_NAME: str = "X-CSRF-Token"
     ENVIRONMENT: str = "development"
+
+    # SSO (shared karan_sso SDK; see karan_sso/ and the SSO contract)
+    # Internal URL of the SSO API, e.g. http://sso-backend:8000/api
+    SSO_BASE_URL: str = "http://localhost:8000/api"
+    # Public issuer (JWT `iss`), e.g. https://auth.karanparmar.in/api/auth. Empty = don't check.
+    SSO_ISSUER: str = ""
+    SSO_AUDIENCE: str = "karanparmar-apps"
+    # Turn on once SSO sets JWT_AUDIENCE.
+    SSO_REQUIRE_AUDIENCE: bool = False
+    # This app's id in SSO (app-scoped roles, e.g. {"allprojects": ["admin"]}).
+    SSO_APP_ID: str = "allprojects"
+    # Legacy HS256 shared secret — only while SSO still signs HS256 (rollout).
+    SSO_JWT_SECRET: str = ""
 
     model_config = _base_config
 
-    @field_validator("SSO_JWT_SECRET")
-    @classmethod
-    def warn_short_secret(cls, value: str) -> str:
-        if len(value) < 32:
-            import logging
+    @property
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT.strip().lower() == "production"
 
-            logging.getLogger(__name__).warning(
-                "SSO_JWT_SECRET is shorter than 32 characters — "
-                "check it matches the SSO JWT_SECRET"
-            )
-        return value
+    def sso_settings(self) -> SsoSettings:
+        """SDK settings built from this app's env."""
+        return SsoSettings(
+            SSO_BASE_URL=self.SSO_BASE_URL,
+            SSO_ISSUER=self.SSO_ISSUER,
+            SSO_AUDIENCE=self.SSO_AUDIENCE,
+            SSO_REQUIRE_AUDIENCE=self.SSO_REQUIRE_AUDIENCE,
+            SSO_JWT_SECRET=self.SSO_JWT_SECRET,
+            SSO_APP_ID=self.SSO_APP_ID,
+        )
+
+
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "[::1]")
 
 
 class CorsSettings(BaseSettings):
+    ENVIRONMENT: str = "development"
     CORS_ALLOWED_ORIGINS: str = (
         "http://localhost:5173,http://localhost:5174,http://localhost:1576,"
         "http://localhost:1577,http://localhost:4173,http://localhost:4174,"
@@ -73,13 +86,19 @@ class CorsSettings(BaseSettings):
 
     @property
     def allowed_origins(self) -> list[str]:
-        if not self.CORS_ALLOWED_ORIGINS:
-            return []
-        return [
-            origin.strip()
-            for origin in self.CORS_ALLOWED_ORIGINS.split(",")
-            if origin.strip()
+        """Explicit origins. Localhost origins are dropped in production."""
+        origins = [
+            origin.strip().rstrip("/")
+            for origin in (self.CORS_ALLOWED_ORIGINS or "").split(",")
+            if origin.strip() and origin.strip() != "*"
         ]
+        if self.ENVIRONMENT.strip().lower() == "production":
+            origins = [
+                o
+                for o in origins
+                if not any(f"://{host}" in o for host in _LOCAL_HOSTS)
+            ]
+        return origins
 
 
 class MediaSettings(BaseSettings):

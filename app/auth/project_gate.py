@@ -1,5 +1,17 @@
 # app/auth/project_gate.py
-"""Central access control for code-backed live apps."""
+"""Central access control for code-backed live apps.
+
+Every live-app endpoint confirms the session with SSO live (karan_sso
+`live_identity`, cached 30 s per token), whether or not the app requires a role:
+
+- Role-gated apps need the *live* global role to be in ApProjectRoleLink
+  (a demotion applies within 30 s instead of up to 15 min of token lifetime).
+- Apps with no required roles still need a signed-in user, and a revoked
+  session (logout / "sign out everywhere" / admin revoke) is blocked too —
+  live apps spend real resources (e.g. scraper quota), the check is cached,
+  and one consistent rule is easier to reason about than two.
+- Fail closed: revoked/invalid session → 401; SSO can't confirm → 503.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +19,7 @@ import logging
 from dataclasses import dataclass
 from uuid import UUID
 
-from fastapi import Depends, Request
+from fastapi import HTTPException, Request, status as http_status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +30,7 @@ from app.api.routes.project.model import (
     ApProjectStatus,
 )
 from app.api.schemas.common import CamelModel
-from app.auth.dependencies import SsoIdentity, get_authenticated_identity
+from app.auth.dependencies import SsoIdentity, get_sso
 from app.core.errors import AppOfflineError, ForbiddenError, NotFoundError
 from app.live_apps import is_known_app_key
 
@@ -84,7 +96,7 @@ async def _load_roles(session: AsyncSession, project_id: UUID) -> list[str]:
 def _role_allowed(identity: SsoIdentity, required_roles: list[str]) -> bool:
     if not required_roles:
         return True
-    current = (identity.role_name or "").strip().lower()
+    current = (identity.role or "").strip().lower()
     allowed = {r.strip().lower() for r in required_roles if r and str(r).strip()}
     return bool(current) and current in allowed
 
@@ -127,7 +139,7 @@ async def resolve_project_app_access(
         logger.warning(
             "Live app role denied user=%s role=%s project=%s required=%s",
             identity.email,
-            identity.role_name,
+            identity.role,
             project.slug,
             roles,
         )
@@ -143,7 +155,8 @@ def require_project_app(expected_app_key: str):
         request: Request,
         session: PGSessionDep,
     ) -> ProjectAppAccess:
-        identity = await get_authenticated_identity(request)
+        # Live: 401 when missing/invalid/revoked, 503 when SSO can't confirm.
+        identity = await get_sso().live_identity(request)
         return await resolve_project_app_access(
             session=session,
             identity=identity,
@@ -155,13 +168,31 @@ def require_project_app(expected_app_key: str):
     return _dependency
 
 
+async def optional_live_identity(request: Request) -> SsoIdentity | None:
+    """Live identity for public pages: None when signed out or the session is
+    revoked; SSO outage still surfaces as 503 (never shown as "no access")."""
+    sso = get_sso()
+    if not sso.token_from_request(request):
+        return None
+    try:
+        return await sso.live_identity(request)
+    except HTTPException as exc:
+        if exc.status_code == http_status.HTTP_401_UNAUTHORIZED:
+            return None
+        raise
+
+
 async def bootstrap_project_app(
     *,
     session: AsyncSession,
     identity: SsoIdentity | None,
     project_slug: str,
 ) -> AppBootstrapResponse:
-    """Public bootstrap for /apps/:slug — does not raise on offline/role denial."""
+    """Public bootstrap for /apps/:slug — does not raise on offline/role denial.
+
+    Pass the live identity (`optional_live_identity`) so `can_access` matches
+    what `require_project_app` will enforce.
+    """
     project = await _load_project_by_slug(session, project_slug)
     if not project.app_key or not is_known_app_key(project.app_key):
         raise NotFoundError("No live app is linked to this project")

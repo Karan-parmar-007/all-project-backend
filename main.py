@@ -5,10 +5,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from karan_sso.fastapi import CSRFMiddleware
+
 from app.api.main_router import main_router
-from app.api.middleware.csrf import CSRFMiddleware
-from app.api.routes.auth import auth_routes
-from app.config import cors_settings
+from app.auth.sso import configure_sso, sso_settings
+from app.config import auth_settings, cors_settings
 from app.core.errors import register_exception_handlers
 from app.db.garage import GarageSession
 from app.db.mongo_session import MongoSession
@@ -48,21 +49,33 @@ async def lifespan(app: FastAPI):
     await mongo_session.close()
 
 
-app = FastAPI(title="All Projects API", lifespan=lifespan)
+configure_sso()
+
+_docs_enabled = not auth_settings.is_production
+app = FastAPI(
+    title="All Projects API",
+    lifespan=lifespan,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
+)
 register_exception_handlers(app)
 
 # CSRF first, CORS last so CORS wraps CSRF and preflights never hit CSRF.
-app.add_middleware(CSRFMiddleware)
+# No anonymous POST endpoints exist, so only health is exempt.
+app.add_middleware(
+    CSRFMiddleware,
+    exempt_prefixes=("/health", "/api/allprojects/health"),
+    settings=sso_settings,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_settings.allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-CSRF-Token"],
 )
 app.include_router(main_router)
-# Local-dev cookie path: refresh_token is scoped to /api/auth
-app.include_router(auth_routes.router, prefix="/api")
 
 
 @app.get("/health")
