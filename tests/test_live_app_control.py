@@ -25,8 +25,7 @@ def _identity(*, role: str | None = "viewer") -> SsoIdentity:
     return SsoIdentity(
         user_id="user-1",
         email="user@example.com",
-        is_owner=False,
-        role_name=role,
+        role=role,
         name="User",
     )
 
